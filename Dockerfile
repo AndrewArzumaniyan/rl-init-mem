@@ -8,10 +8,12 @@ WORKDIR /workspace
 
 RUN pip install --upgrade pip setuptools wheel
 
-RUN pip install --index-url https://download.pytorch.org/whl/cu124 torch==2.5.1
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126
+ARG TORCH_VERSION=2.10.0
+RUN pip install --index-url "${TORCH_INDEX_URL}" torch=="${TORCH_VERSION}"
 
 ARG AIHWKIT_GPU_WHEEL_URL=https://aihwkit-gpu-demo.s3.us-east.cloud-object-storage.appdomain.cloud/aihwkit-1.1.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-RUN pip install "${AIHWKIT_GPU_WHEEL_URL}"
+RUN pip install --extra-index-url "${TORCH_INDEX_URL}" "${AIHWKIT_GPU_WHEEL_URL}"
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
