@@ -1,0 +1,18 @@
+# Core ML & Science
+torch>=2.0.0
+torchvision
+numpy>=1.24.0
+scipy>=1.10.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Simulation & RL
+aihwkit>=0.6.0
+gymnasium>=0.28.1
+
+# Build tools
+cmake>=3.18
+scikit-build>=0.16.0
+ninja
