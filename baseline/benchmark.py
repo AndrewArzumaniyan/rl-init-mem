@@ -1,82 +1,74 @@
 import torch
-import numpy as np
 import os
 import sys
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    current_dir = os.getcwd()
+project_root = os.path.abspath(os.path.join(current_dir, ".."))
+sys.path.append(project_root)
 
+from core.vcm_simulator import VCMSimulator
 from baseline.model import NPPModel
-from core.config import get_memristor_config
-from aihwkit.nn import AnalogLinear
-from aihwkit.optim import AnalogSGD
 
-def run_benchmark(num_samples=1000, tolerance=0.05, max_steps=10):
+def run_benchmark(num_samples=10000, rpd_one_shot=0.50, rpd_iterative=0.05, max_steps=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+    simulator = VCMSimulator(device=device)
+
     model = NPPModel().to(device)
-    model.load_state_dict(torch.load('./npp_final.pth', map_location=device))
+    model.load_state_dict(torch.load(os.path.join(current_dir, 'npp_final.pth'), map_location=device))
     model.eval()
 
-    config = get_memristor_config()
-    layer = AnalogLinear(1, 1, bias=False, rpu_config=config)
+    g_curr = torch.empty(num_samples, 1, device=device).uniform_(simulator.g_min, simulator.g_max)
+    g_target = torch.empty(num_samples, 1, device=device).uniform_(simulator.g_min, simulator.g_max)
 
-    success_count = 0
-    total_steps = 0
-    final_errors = []
+    invalid_mask = (torch.abs(g_target - g_curr) / g_target <= rpd_iterative).squeeze(1)
+    while invalid_mask.any():
+        num_invalid = invalid_mask.sum().item()
+        g_curr[invalid_mask] = torch.empty(num_invalid, 1, device=device).uniform_(simulator.g_min, simulator.g_max)
+        g_target[invalid_mask] = torch.empty(num_invalid, 1, device=device).uniform_(simulator.g_min, simulator.g_max)
+        invalid_mask = (torch.abs(g_target - g_curr) / g_target <= rpd_iterative).squeeze(1)
 
-    print(f"Starting benchmark: {num_samples} devices.")
-    print(f"Max steps: {max_steps} | Tolerance: ±{tolerance}")
+    steps_taken = torch.zeros(num_samples, 1, device=device)
+    success = torch.zeros(num_samples, 1, dtype=torch.bool, device=device)
+    one_shot_success = torch.zeros(num_samples, 1, dtype=torch.bool, device=device)
 
-    for i in range(num_samples):
+    t_scale = 1e-6
 
-        g_current = np.random.uniform(-1.0, 1.0) 
-        g_target = np.random.uniform(-1.0, 1.0)
+    for step in range(1, max_steps + 1):
+        active_mask = ~success
+        if not active_mask.any():
+            break
+
+        with torch.no_grad():
+            out = model(g_curr, g_target)
+
+        t_pulse = torch.abs(out) * t_scale
+        t_pulse = torch.clamp(t_pulse, 0.0, 2e-6)
         
-        layer.set_weights(torch.tensor([[g_current]]))
-        layer.train()
+        i_t = torch.sign(g_target - g_curr)
+
+        g_next = simulator.simulate_pulse(g_curr, i_t, t_pulse, record_history=False)
+        g_curr = torch.where(active_mask, g_next, g_curr)
+
+        current_rpd = torch.abs(g_target - g_curr) / g_target
         
-        step = 0
-        while step < max_steps:
-            step += 1
-            delta_g_req = g_target - g_current
-            
-            # Проверка успешного достижения цели
-            if abs(delta_g_req) <= tolerance:
-                success_count += 1
-                break
-            
-            gs_tensor = torch.tensor([[g_current]], dtype=torch.float32).to(device)
-            dg_tensor = torch.tensor([[delta_g_req]], dtype=torch.float32).to(device)
-            
-            with torch.no_grad():
-                t_pulse = model(gs_tensor, dg_tensor).item()
-            
-            t_pulse = np.clip(t_pulse, 0.01, 1.0)
-            
-            optimizer = AnalogSGD(layer.parameters(), lr=t_pulse)
-            direction = 1.0 if delta_g_req > 0 else -1.0
-            
-            x = torch.tensor([[1.0]])
-            y_pred = layer(x)
-            loss = y_pred * (-direction)
-            
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            g_current = layer.get_weights()[0].item()
-        
-        total_steps += step
-        final_errors.append(abs(g_target - g_current))
-        
-        if (i + 1) % 200 == 0:
-            print(f"Tested {i + 1}/{num_samples}")
+        if step == 1:
+            one_shot_success = current_rpd <= rpd_one_shot
+
+        just_succeeded = active_mask & (current_rpd <= rpd_iterative)
+        success = success | just_succeeded
+        steps_taken = torch.where(just_succeeded, step * torch.ones_like(steps_taken), steps_taken)
+
+    steps_taken[~success] = max_steps
 
     print("\n================================================")
+    print("                (Ouroboros Protocol)              ")
     print("================================================")
-    print(f"Success Rate:        {success_count/num_samples*100:.2f}%")
-    print(f"Average Steps:       {total_steps/num_samples:.2f}")
-    print(f"Mean Final Error:    {np.mean(final_errors):.4f}")
+    print(f"One-shot Success (< {int(rpd_one_shot*100)}% RPD): {(one_shot_success.float().mean().item() * 100):.2f}%")
+    print(f"Iterative Success (< {int(rpd_iterative*100)}% RPD): {(success.float().mean().item() * 100):.2f}% (за {max_steps} шагов)")
+    print(f"Average Steps Taken:          {steps_taken.float().mean().item():.2f}")
     print("================================================")
 
 if __name__ == "__main__":

@@ -11,10 +11,10 @@ class NPPModel(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Linear(32, 1),
-            nn.Sigmoid()
+            nn.Linear(32, 1)
         )
 
-    def forward(self, g_start, delta_g):
-        x = torch.cat([g_start, delta_g], dim=1)
-        return self.net(x)
+    def forward(self, g_start, g_target):
+        x = torch.cat([g_start, g_target], dim=1)
+        out = self.net(x)
+        return out
