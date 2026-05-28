@@ -1,7 +1,11 @@
 .git
+.pytest_cache
 __pycache__
 .ipynb_checkpoints
 .venv
 venv
 *.pyc
 *.pyo
+data
+reports
+*.log
